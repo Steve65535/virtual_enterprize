@@ -11,10 +11,17 @@ export interface EmployeeConfig {
   role: string;
   memory_limit: string;
   cpu_limit: string;
+  app_gateways: AppGateway[];
 }
 
 export interface EmployeeStatus extends EmployeeConfig {
   status: string;
+}
+
+export interface AppGateway {
+  gateway_type: string;
+  enabled: boolean;
+  credentials: Record<string, string>;
 }
 
 export interface AppConfig {

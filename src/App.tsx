@@ -3,6 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatTerminal } from "./components/ChatTerminal";
 import { FileTree } from "./components/FileTree";
 import { Dashboard } from "./components/Dashboard";
+import { GatewayConfig } from "./components/GatewayConfig";
 import { SquareTerminal, Play } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { EmployeeStatus } from "./types";
@@ -95,18 +96,15 @@ function App() {
             </div>
 
             <div className="flex bg-[#1e1e1e] rounded-md p-0.5 border border-[#333333] shrink-0 mx-2">
-              <button
-                className={`px-3 py-1 text-xs font-medium rounded ${activeTab === "chat" ? "bg-[#37373d] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"}`}
-                onClick={() => setActiveTab("chat")}
-              >
-                Chat & Terminal
-              </button>
-              <button
-                className={`px-3 py-1 text-xs font-medium rounded ${activeTab === "files" ? "bg-[#37373d] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"}`}
-                onClick={() => setActiveTab("files")}
-              >
-                Files & Editor
-              </button>
+              {(["chat", "files", "config"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  className={`px-3 py-1 text-xs font-medium rounded capitalize ${activeTab === tab ? "bg-[#37373d] text-white shadow-sm" : "text-gray-400 hover:text-gray-200"}`}
+                  onClick={() => setActiveTab(tab)}
+                >
+                  {tab === "chat" ? "Chat & Terminal" : tab === "files" ? "Files & Editor" : "Gateways"}
+                </button>
+              ))}
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
@@ -134,8 +132,10 @@ function App() {
             {selectedEmployee ? (
               activeTab === "chat" ? (
                 <ChatTerminal instanceId={selectedEmployee.id} isRunning={isRunning} />
-              ) : (
+              ) : activeTab === "files" ? (
                 <FileTree instanceId={selectedEmployee.id} />
+              ) : (
+                <GatewayConfig employee={selectedEmployee} />
               )
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 text-gray-600">

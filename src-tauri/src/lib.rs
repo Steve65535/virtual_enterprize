@@ -25,6 +25,15 @@ struct ApiProvider {
     api_key: String,
 }
 
+/// One app gateway attached to an employee.
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct AppGateway {
+    gateway_type: String,
+    enabled: bool,
+    #[serde(default)]
+    credentials: HashMap<String, String>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct EmployeeConfig {
     id: String,
@@ -32,6 +41,8 @@ struct EmployeeConfig {
     role: String,
     memory_limit: String,
     cpu_limit: String,
+    #[serde(default)]
+    app_gateways: Vec<AppGateway>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -50,6 +61,7 @@ struct EmployeeStatus {
     status: String,
     memory_limit: String,
     cpu_limit: String,
+    app_gateways: Vec<AppGateway>,
 }
 
 // ── Global State ───────────────────────────────────────────────────────────────
@@ -171,6 +183,7 @@ fn list_employees(app: AppHandle) -> Vec<EmployeeStatus> {
         status: container_status(&e.id),
         memory_limit: e.memory_limit.clone(),
         cpu_limit: e.cpu_limit.clone(),
+        app_gateways: e.app_gateways.clone(),
     }).collect()
 }
 
@@ -191,7 +204,7 @@ fn add_employee(
         .as_millis()
         .to_string();
 
-    let emp = EmployeeConfig { id: id.clone(), name, role, memory_limit, cpu_limit };
+    let emp = EmployeeConfig { id: id.clone(), name, role, memory_limit, cpu_limit, app_gateways: vec![] };
     config.employees.push(emp.clone());
     save_config_file(&path, &config)?;
 
@@ -232,6 +245,23 @@ fn update_employee(
 }
 
 #[tauri::command]
+fn save_gateways(
+    app: AppHandle,
+    employee_id: String,
+    gateways: Vec<AppGateway>,
+) -> Result<(), String> {
+    let path = config_path(&app);
+    let mut config = load_config_file(&path);
+    config
+        .employees
+        .iter_mut()
+        .find(|e| e.id == employee_id)
+        .ok_or("Employee not found")?
+        .app_gateways = gateways;
+    save_config_file(&path, &config)
+}
+
+#[tauri::command]
 fn remove_employee(app: AppHandle, id: String) -> Result<(), String> {
     let _ = Command::new("docker").args(["rm", "-f", &container_name(&id)]).output();
     { WATCHERS.lock().unwrap().remove(&id); }
@@ -253,9 +283,33 @@ async fn start_sandbox(
     let vol = vol_dir(&instance_id);
     let _ = fs::create_dir_all(&vol);
 
-    let base_image = {
+    // Resolve image + collect enabled gateway env vars + write .openclaw.env
+    let (base_image, gateway_env) = {
         let config = load_config_file(&config_path(&app));
-        config.default_image.unwrap_or_else(|| "ubuntu:22.04".to_string())
+        let image = config.default_image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+        let env_pairs: Vec<(String, String)> = config
+            .employees
+            .iter()
+            .find(|e| e.id == instance_id)
+            .map(|e| {
+                e.app_gateways
+                    .iter()
+                    .filter(|g| g.enabled)
+                    .flat_map(|g| g.credentials.iter().map(|(k, v)| (k.clone(), v.clone())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Write .openclaw.env into the volume so template scripts can `source` it
+        if !env_pairs.is_empty() {
+            let content: String = env_pairs
+                .iter()
+                .map(|(k, v)| format!("export {}={}\n", k, v))
+                .collect();
+            let _ = fs::write(PathBuf::from(&vol).join(".openclaw.env"), content);
+        }
+
+        (image, env_pairs)
     };
 
     // FS watcher — dedicated OS thread, not on the async executor
@@ -286,19 +340,23 @@ async fn start_sandbox(
     let vol_mount = format!("{}:/workspace", vol);
 
     let output = tauri::async_runtime::spawn_blocking(move || {
-        Command::new("docker")
-            .args([
-                "run", "-d",
-                "--name", &name,
-                "--memory", &memory_limit,
-                "--memory-swap", &memory_limit,
-                "--cpus", &cpu_limit,
-                "-v", &vol_mount,
-                "-w", "/workspace",
-                &base_image,
-                "tail", "-f", "/dev/null",
-            ])
-            .output()
+        let mut args: Vec<String> = vec![
+            "run".into(), "-d".into(),
+            "--name".into(), name,
+            "--memory".into(), memory_limit.clone(),
+            "--memory-swap".into(), memory_limit,
+            "--cpus".into(), cpu_limit,
+            "-v".into(), vol_mount,
+            "-w".into(), "/workspace".into(),
+        ];
+        // Inject enabled gateway credentials as environment variables
+        for (key, val) in gateway_env {
+            args.push("--env".into());
+            args.push(format!("{}={}", key, val));
+        }
+        args.push(base_image);
+        args.extend_from_slice(&["tail".into(), "-f".into(), "/dev/null".into()]);
+        Command::new("docker").args(&args).output()
     })
     .await
     .map_err(|e| e.to_string())?
@@ -399,6 +457,7 @@ pub fn run() {
             add_employee,
             update_employee,
             remove_employee,
+            save_gateways,
             start_sandbox,
             stop_sandbox,
             exec_sandbox,
