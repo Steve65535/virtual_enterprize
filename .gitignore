@@ -31,5 +31,5 @@ src-tauri/gen
 .idea
 *.iml
 
-# OpenClaw Build
-openclaw_build/
+# OpenClaw Build (only ignore the copied npm package, not the scripts)
+openclaw_build/openclaw-pkg/

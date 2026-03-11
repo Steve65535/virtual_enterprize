@@ -1,0 +1,31 @@
+#!/bin/bash
+# claw_msg — inter-agent messaging tool for OpenClaw Enterprise
+# Usage: claw_msg <recipient_name> <message>
+# Example: claw_msg "Alice" "The report is ready at /enterprise_shared/report.json"
+
+set -e
+
+if [ "$#" -lt 2 ]; then
+  echo "Usage: claw_msg <to> <message>" >&2
+  exit 1
+fi
+
+TO="$1"
+MSG="$2"
+
+BUS_DIR="/enterprise_shared/.bus"
+if [ ! -d "$BUS_DIR" ]; then
+  echo "Error: enterprise shared bus not found. Is the container started with enterprise networking?" >&2
+  exit 1
+fi
+
+# Resolve sender name from env or hostname
+FROM="${OPENCLAW_EMPLOYEE_NAME:-${HOSTNAME:-unknown}}"
+TS=$(date +%s)
+FNAME="${BUS_DIR}/${TS}_${FROM}_${TO}.json"
+
+cat > "$FNAME" << EOF
+{"from":"$FROM","to":"$TO","message":"$MSG","timestamp":$TS}
+EOF
+
+echo "Message sent: [$FROM] → [$TO]: $MSG"

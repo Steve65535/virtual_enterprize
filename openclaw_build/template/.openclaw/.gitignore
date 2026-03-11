@@ -1,0 +1,10 @@
+# Backup files
+*.bak
+*.bak.*
+# Runtime state
+media/inbound/*
+!media/inbound/.gitkeep
+feishu/dedup/default.json
+cron/runs/*.jsonl
+logs/*.log
+agents/main/sessions/*.jsonl

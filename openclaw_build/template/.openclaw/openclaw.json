@@ -1,0 +1,112 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.22-2",
+    "lastTouchedAt": "2026-03-05T06:13:23.130Z"
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.deepseek.com/v1",
+        "apiKey": "",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek Chat"
+          }
+        ]
+      },
+      "minimax": {
+        "baseUrl": "https://api.minimax.chat/v1",
+        "apiKey": "",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "abab6.5s-chat",
+            "name": "MiniMax abab6.5s Chat"
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/deepseek-chat",
+        "fallbacks": [
+          "minimax/abab6.5s-chat"
+        ]
+      },
+      "imageModel": {
+        "primary": "minimax/abab6.5s-chat"
+      },
+      "models": {
+        "minimax/abab6.5s-chat": {}
+      },
+      "memorySearch": {
+        "enabled": false
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "tools": {
+    "media": {
+      "image": {
+        "enabled": true,
+        "models": [
+          {
+            "provider": "minimax",
+            "model": "abab6.5s-chat"
+          }
+        ]
+      }
+    },
+    "exec": {
+      "security": "full",
+      "ask": "off"
+    }
+  },
+  "commands": {
+    "native": true,
+    "nativeSkills": true,
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "channels": {
+    "discord": {
+      "enabled": false,
+      "token": "",
+      "groupPolicy": "open",
+      "streaming": "off",
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "1375148304681275582"
+      ]
+    },
+    "feishu": {
+      "enabled": true,
+      "appId": "cli_a92aab93e838dbce",
+      "appSecret": "",
+      "connectionMode": "websocket"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": ""
+    }
+  },
+  "plugins": {
+    "entries": {
+      "discord": {
+        "enabled": true
+      },
+      "feishu": {
+        "enabled": true
+      }
+    }
+  }
+}

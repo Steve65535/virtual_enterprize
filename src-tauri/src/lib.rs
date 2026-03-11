@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 
-// ── Data Structures ────────────────────────────────────────────────────────────
+//  Data Structures 
 
 #[derive(Serialize, Deserialize, Clone)]
 struct FileNode {
@@ -47,6 +47,8 @@ struct EmployeeConfig {
     app_gateways: Vec<AppGateway>,
     #[serde(default)]
     internet_blocked: bool,
+    #[serde(default)]
+    auto_start: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -77,13 +79,13 @@ struct EnterpriseMessage {
     timestamp: u64,
 }
 
-// ── Global State ───────────────────────────────────────────────────────────────
+//  Global State 
 
 lazy_static::lazy_static! {
     static ref WATCHERS: Mutex<HashMap<String, RecommendedWatcher>> = Mutex::new(HashMap::new());
 }
 
-// ── Internal Helpers ───────────────────────────────────────────────────────────
+//  Internal Helpers 
 
 fn config_path(app: &AppHandle) -> PathBuf {
     let data_dir = app
@@ -111,7 +113,8 @@ fn container_name(id: &str) -> String {
 }
 
 fn vol_dir(id: &str) -> String {
-    format!("/tmp/openclaw_{}", id)
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    format!("{}/.openclaw_enterprise/volumes/{}", home, id)
 }
 
 fn container_status(id: &str) -> String {
@@ -156,7 +159,7 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-// ── Device Identity Generation ─────────────────────────────────────────────────
+//  Device Identity Generation 
 
 fn b64_encode(data: &[u8]) -> String {
     const C: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -198,7 +201,7 @@ fn pem_encode(label: &str, data: &[u8]) -> String {
     format!("-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n")
 }
 
-/// Ed25519 public key → SubjectPublicKeyInfo DER
+/// Ed25519 public key  SubjectPublicKeyInfo DER
 fn ed25519_spki(pub_bytes: &[u8; 32]) -> Vec<u8> {
     // SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING { 0x00 || key } }
     let mut inner = vec![0x30u8, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
@@ -209,7 +212,7 @@ fn ed25519_spki(pub_bytes: &[u8; 32]) -> Vec<u8> {
     spki
 }
 
-/// Ed25519 private key → PKCS#8 OneAsymmetricKey DER
+/// Ed25519 private key  PKCS#8 OneAsymmetricKey DER
 fn ed25519_pkcs8(priv_bytes: &[u8; 32]) -> Vec<u8> {
     // inner private key octet string: 04 20 <key>
     let mut inner_key = vec![0x04u8, 0x20];
@@ -255,7 +258,7 @@ fn generate_device_identity() -> serde_json::Value {
     })
 }
 
-// ── New-employee workspace cleanup ────────────────────────────────────────────
+//  New-employee workspace cleanup 
 
 /// After template copy: wipe inherited history and mint a fresh device identity.
 fn clean_employee_workspace(vol: &str) {
@@ -293,7 +296,7 @@ fn clean_employee_workspace(vol: &str) {
     let feishu_dedup = base.join("feishu/dedup/default.json");
     let _ = fs::write(&feishu_dedup, b"{}");
 
-    // 5. Fresh device identity — new keypair + new deviceId
+    // 5. Fresh device identity  new keypair + new deviceId
     let device_path = base.join("identity/device.json");
     if let Ok(data) = serde_json::to_string_pretty(&generate_device_identity()) {
         let _ = fs::write(&device_path, data);
@@ -301,7 +304,7 @@ fn clean_employee_workspace(vol: &str) {
     }
 }
 
-/// Lowercase, replace non-alphanumeric with dash — safe as a Docker network alias.
+/// Lowercase, replace non-alphanumeric with dash  safe as a Docker network alias.
 fn sanitize_alias(name: &str) -> String {
     name.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' { c.to_ascii_lowercase() } else { '-' })
@@ -340,7 +343,7 @@ fn ensure_openclaw_networks() {
     }
 }
 
-// ── Config Injection (Strategy Pattern) ───────────────────────────────────────
+//  Config Injection (Strategy Pattern) 
 
 fn extract_hostname(url: &str) -> Option<String> {
     let stripped = url
@@ -441,7 +444,7 @@ fn inject_openclaw_config(vol: &str, api_providers: &[ApiProvider], app_gateways
 
             if let Ok(data) = serde_json::to_string_pretty(&cfg) {
                 let _ = fs::write(&openclaw_path, data);
-                eprintln!("[openclaw] injected config → {}", openclaw_path.display());
+                eprintln!("[openclaw] injected config  {}", openclaw_path.display());
             }
         }
     }
@@ -453,13 +456,13 @@ fn inject_openclaw_config(vol: &str, api_providers: &[ApiProvider], app_gateways
 
             if let Ok(data) = serde_json::to_string_pretty(&cfg) {
                 let _ = fs::write(&models_path, data);
-                eprintln!("[openclaw] injected config → {}", models_path.display());
+                eprintln!("[openclaw] injected config  {}", models_path.display());
             }
         }
     }
 }
 
-// ── Config Commands ────────────────────────────────────────────────────────────
+//  Config Commands 
 
 #[tauri::command]
 fn load_config(app: AppHandle) -> AppConfig {
@@ -487,7 +490,7 @@ fn save_sandbox_settings(
     save_config_file(&path, &config)
 }
 
-// ── Employee CRUD ──────────────────────────────────────────────────────────────
+//  Employee CRUD 
 
 #[tauri::command]
 fn list_employees(app: AppHandle) -> Vec<EmployeeStatus> {
@@ -521,28 +524,45 @@ fn add_employee(
         .as_millis()
         .to_string();
 
-    let emp = EmployeeConfig { id: id.clone(), name, role, memory_limit, cpu_limit, app_gateways: vec![], internet_blocked: false };
+    let emp = EmployeeConfig { id: id.clone(), name, role, memory_limit, cpu_limit, app_gateways: vec![], internet_blocked: false, auto_start: false };
     config.employees.push(emp.clone());
     save_config_file(&path, &config)?;
 
-    // Copy template + inject config — runs in background, never blocks UI
+    // Copy template + inject config  runs in background, never blocks UI
     let api_providers = config.api_providers.clone();
-    if let Some(tpl) = config.template_path {
-        let vol = vol_dir(&id);
-        std::thread::spawn(move || {
-            let src = PathBuf::from(&tpl);
-            let dst = PathBuf::from(&vol);
-            if src.is_dir() {
-                if let Err(e) = copy_dir_contents(&src, &dst) {
-                    eprintln!("[openclaw] template copy error: {e}");
-                    return;
-                }
-            }
-            // Wipe inherited history + mint fresh device identity
-            clean_employee_workspace(&vol);
-            // Inject LLM providers; gateways are empty at creation
-            inject_openclaw_config(&vol, &api_providers, &[]);
+    // Resolve template path: user-configured > bundled resource > dev fallback
+    let tpl_path: Option<String> = config.template_path.clone()
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            // Production: bundled resource
+            app.path().resource_dir().ok()
+                .map(|d| d.join("openclaw_template"))
+                .filter(|p| p.is_dir())
+                .map(|p| p.to_string_lossy().to_string())
+        })
+        .or_else(|| {
+            // Dev mode: relative to Cargo.toml location (src-tauri/../openclaw_build/template)
+            let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent().unwrap_or(Path::new("."))
+                .join("openclaw_build/template");
+            if dev.is_dir() { Some(dev.to_string_lossy().to_string()) } else { None }
         });
+
+    if let Some(tpl) = tpl_path {
+        let vol = vol_dir(&id);
+        let src = PathBuf::from(&tpl);
+        let dst = PathBuf::from(&vol);
+        if src.is_dir() {
+            if let Err(e) = copy_dir_contents(&src, &dst) {
+                return Err(format!("Template copy failed: {e}"));
+            }
+        }
+        // Wipe inherited history + mint fresh device identity
+        clean_employee_workspace(&vol);
+        // Inject LLM providers; gateways are empty at creation
+        inject_openclaw_config(&vol, &api_providers, &[]);
+    } else {
+        eprintln!("[openclaw] no template found  employee volume will be empty");
     }
 
     Ok(emp)
@@ -583,11 +603,21 @@ fn save_gateways(
         .app_gateways = gateways.clone();
     save_config_file(&path, &config)?;
 
-    // Re-inject channel credentials into the employee's volume
+    // Re-inject channel credentials into the employee's volume, then hot-reload
     let vol = vol_dir(&employee_id);
     let api_providers = config.api_providers.clone();
+    let cname_reload = container_name(&employee_id);
+    let emp_id_reload = employee_id.clone();
     std::thread::spawn(move || {
         inject_openclaw_config(&vol, &api_providers, &gateways);
+        // If container is running, kill gateway process  watchdog restarts it with new config
+        if container_status(&emp_id_reload) == "running" {
+            let _ = Command::new("docker")
+                .args(["exec", &cname_reload, "sh", "-c",
+                       "pkill -f 'openclaw.mjs' 2>/dev/null || true"])
+                .output();
+            eprintln!("[openclaw] gateway reload triggered for {}", cname_reload);
+        }
     });
 
     Ok(())
@@ -662,7 +692,57 @@ fn clear_enterprise_messages() -> Result<(), String> {
     Ok(())
 }
 
-// ── Sandbox Commands ───────────────────────────────────────────────────────────
+//  Sandbox Commands 
+
+/// Core docker run logic  shared by start_sandbox and auto-recovery.
+/// Removes any stale container with the same name before starting.
+fn launch_container(
+    id: &str,
+    image: &str,
+    memory_limit: &str,
+    cpu_limit: &str,
+    emp_name: &str,
+    emp_alias: &str,
+    gateway_env: &[(String, String)],
+    internet_blocked: bool,
+) -> std::io::Result<std::process::Output> {
+    let name = container_name(id);
+    let vol_mount = format!("{}:/workspace", vol_dir(id));
+    let shared_mount = "/tmp/openclaw_enterprise_shared:/enterprise_shared".to_string();
+
+    // Remove stale container (ignore errors  it might not exist)
+    let _ = Command::new("docker").args(["rm", "-f", &name]).output();
+
+    let mut args: Vec<String> = vec![
+        "run".into(), "-d".into(),
+        "--name".into(), name.clone(),
+        "--memory".into(), memory_limit.to_string(),
+        "--memory-swap".into(), memory_limit.to_string(),
+        "--cpus".into(), cpu_limit.to_string(),
+        "-v".into(), vol_mount,
+        "-v".into(), shared_mount,
+        "--network".into(), "openclaw-intranet".into(),
+        "--network-alias".into(), emp_alias.to_string(),
+        "-w".into(), "/workspace".into(),
+        "--env".into(), format!("OPENCLAW_EMPLOYEE_NAME={}", emp_name),
+    ];
+    for (k, v) in gateway_env {
+        args.push("--env".into());
+        args.push(format!("{}={}", k, v));
+    }
+    args.push(image.to_string());
+    args.extend_from_slice(&["tail".into(), "-f".into(), "/dev/null".into()]);
+
+    let result = Command::new("docker").args(&args).output()?;
+
+    if result.status.success() && !internet_blocked {
+        let _ = Command::new("docker")
+            .args(["network", "connect", "--alias", emp_alias, "openclaw-internet", &name])
+            .output();
+    }
+    Ok(result)
+}
+
 
 #[tauri::command]
 async fn start_sandbox(
@@ -677,7 +757,7 @@ async fn start_sandbox(
     // Resolve image + collect enabled gateway env vars + write .openclaw.env
     let (base_image, gateway_env, emp_alias, emp_name, internet_blocked) = {
         let config = load_config_file(&config_path(&app));
-        let image = config.default_image.unwrap_or_else(|| "ubuntu:22.04".to_string());
+        let image = config.default_image.unwrap_or_else(|| "openclaw-base".to_string());
         let (alias, display_name, blocked, env_pairs) =
             if let Some(e) = config.employees.iter().find(|e| e.id == instance_id) {
                 let alias = sanitize_alias(&e.name);
@@ -706,7 +786,7 @@ async fn start_sandbox(
         (image, env_pairs, alias, display_name, blocked)
     };
 
-    // FS watcher — dedicated OS thread, not on the async executor
+    // FS watcher  dedicated OS thread, not on the async executor
     let app_h = app.clone();
     let wid = instance_id.clone();
     let vol_path = vol.clone();
@@ -729,50 +809,28 @@ async fn start_sandbox(
         }
     });
 
-    // Docker run — blocking, pushed to thread pool so it never freezes the UI
-    let name = container_name(&instance_id);
-    let cname_net = name.clone();
-    let alias_net = emp_alias.clone();
-    let vol_mount = format!("{}:/workspace", vol);
-    let shared_mount = "/tmp/openclaw_enterprise_shared:/enterprise_shared".to_string();
-
+    // Docker run  delegate to launch_container helper
+    let iid2 = instance_id.clone();
     let output = tauri::async_runtime::spawn_blocking(move || {
-        let mut args: Vec<String> = vec![
-            "run".into(), "-d".into(),
-            "--name".into(), name,
-            "--memory".into(), memory_limit.clone(),
-            "--memory-swap".into(), memory_limit,
-            "--cpus".into(), cpu_limit,
-            "-v".into(), vol_mount,
-            "-v".into(), shared_mount,
-            "--network".into(), "openclaw-intranet".into(),
-            "--network-alias".into(), emp_alias,
-            "-w".into(), "/workspace".into(),
-        ];
-        // Inject employee identity + gateway credentials as environment variables
-        args.push("--env".into());
-        args.push(format!("OPENCLAW_EMPLOYEE_NAME={}", emp_name));
-        for (key, val) in gateway_env {
-            args.push("--env".into());
-            args.push(format!("{}={}", key, val));
-        }
-        args.push(base_image);
-        args.extend_from_slice(&["tail".into(), "-f".into(), "/dev/null".into()]);
-        let result = Command::new("docker").args(&args).output()?;
-
-        // Also connect to internet network unless explicitly blocked
-        if result.status.success() && !internet_blocked {
-            let _ = Command::new("docker")
-                .args(["network", "connect", "--alias", &alias_net, "openclaw-internet", &cname_net])
-                .output();
-        }
-        Ok(result)
+        launch_container(
+            &iid2, &base_image, &memory_limit, &cpu_limit,
+            &emp_name, &emp_alias,
+            &gateway_env.iter().map(|(k,v)|(k.clone(),v.clone())).collect::<Vec<_>>(),
+            internet_blocked,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
     .map_err(|e: std::io::Error| e.to_string())?;
 
     if output.status.success() {
+        // Mark auto_start so app restart can recover this container
+        let cfg_path = config_path(&app);
+        let mut cfg = load_config_file(&cfg_path);
+        if let Some(emp) = cfg.employees.iter_mut().find(|e| e.id == instance_id) {
+            emp.auto_start = true;
+            let _ = save_config_file(&cfg_path, &cfg);
+        }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
@@ -780,7 +838,7 @@ async fn start_sandbox(
 }
 
 #[tauri::command]
-async fn stop_sandbox(instance_id: String) -> Result<String, String> {
+async fn stop_sandbox(app: AppHandle, instance_id: String) -> Result<String, String> {
     { WATCHERS.lock().unwrap().remove(&instance_id); }
 
     let cname = container_name(&instance_id);
@@ -792,6 +850,13 @@ async fn stop_sandbox(instance_id: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?;
 
     if output.status.success() {
+        // Clear auto_start so this employee won't be recovered on next app launch
+        let cfg_path = config_path(&app);
+        let mut cfg = load_config_file(&cfg_path);
+        if let Some(emp) = cfg.employees.iter_mut().find(|e| e.id == instance_id) {
+            emp.auto_start = false;
+            let _ = save_config_file(&cfg_path, &cfg);
+        }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).to_string())
@@ -817,7 +882,7 @@ async fn exec_sandbox(instance_id: String, cmd: String) -> Result<String, String
     }
 }
 
-// ── File System Commands ───────────────────────────────────────────────────────
+//  File System Commands 
 
 #[tauri::command]
 fn read_sandbox_dir(instance_id: String) -> Result<Vec<FileNode>, String> {
@@ -853,14 +918,47 @@ fn write_file(instance_id: String, file_path: String, content: String) -> Result
     fs::write(&full, content).map_err(|e| e.to_string())
 }
 
-// ── Entry Point ────────────────────────────────────────────────────────────────
+//  Entry Point 
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
             ensure_openclaw_networks();
+            // Auto-recover containers that were running before app was closed
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let cfg = load_config_file(&config_path(&app_handle));
+                let image = cfg.default_image.clone().unwrap_or_else(|| "openclaw-base".to_string());
+                for emp in cfg.employees.iter().filter(|e| e.auto_start) {
+                    let status = container_status(&emp.id);
+                    if status == "running" {
+                        continue; // already up
+                    }
+                    // Recreate from scratch  works whether container exists or not
+                    let gateway_env: Vec<(String, String)> = emp.app_gateways.iter()
+                        .filter(|g| g.enabled)
+                        .flat_map(|g| g.credentials.iter().map(|(k,v)|(k.clone(),v.clone())))
+                        .collect();
+                    let alias = sanitize_alias(&emp.name);
+                    let _ = fs::create_dir_all(vol_dir(&emp.id));
+                    match launch_container(
+                        &emp.id, &image,
+                        &emp.memory_limit, &emp.cpu_limit,
+                        &emp.name, &alias,
+                        &gateway_env,
+                        emp.internet_blocked,
+                    ) {
+                        Ok(r) if r.status.success() =>
+                            eprintln!("[openclaw] auto-recovered: openclaw_{}", emp.id),
+                        Ok(r) =>
+                            eprintln!("[openclaw] recovery failed: {}", String::from_utf8_lossy(&r.stderr)),
+                        Err(e) =>
+                            eprintln!("[openclaw] recovery error: {e}"),
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
