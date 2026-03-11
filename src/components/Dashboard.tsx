@@ -1,7 +1,7 @@
-import { Box, Check, Edit3, Globe, GlobeLock, HardDrive, Key, MessageSquare, Network, Plus, Trash2, Users, X, ChevronDown } from "lucide-react";
+import { Box, Check, Edit3, HardDrive, Key, Network, Plus, Radio, Trash2, Users, X, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ApiProvider, AppConfig, EmployeeStatus, EnterpriseMessage } from "../types";
+import { ApiProvider, AppConfig, EmployeeStatus } from "../types";
 
 interface Props {
   onRefresh: () => void;
@@ -220,6 +220,88 @@ function sanitizeAlias(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
 }
 
+// ── Network Topology SVG ───────────────────────────────────────────────────────
+
+function NetworkTopologyMap({ employees }: { employees: EmployeeStatus[] }) {
+  const W = 600;
+  const H = 210;
+  const hubX = W / 2;
+  const hubY = 78;
+  const inetX = W - 64;
+  const inetY = 28;
+
+  const count = employees.length;
+  const spread = Math.min(W - 100, Math.max(count * 88, 88));
+  const startX = (W - spread) / 2;
+  const empY = 162;
+  const ex = (i: number) => (count <= 1 ? hubX : startX + (i / (count - 1)) * spread);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 210 }}>
+      {/* Internet node */}
+      <rect x={inetX - 52} y={inetY - 14} width={108} height={28} rx={6}
+        fill="rgba(59,130,246,0.07)" stroke="rgba(59,130,246,0.25)" strokeWidth={1} />
+      <text x={inetX} y={inetY + 5} textAnchor="middle" fill="rgb(147,197,253)" fontSize={11}>
+        🌐 Internet
+      </text>
+
+      {/* Hub */}
+      <rect x={hubX - 82} y={hubY - 18} width={164} height={36} rx={8}
+        fill="rgba(6,182,212,0.07)" stroke="rgba(6,182,212,0.3)" strokeWidth={1} />
+      <text x={hubX} y={hubY + 6} textAnchor="middle"
+        fill="rgb(103,232,249)" fontSize={12} fontWeight="600">
+        openclaw-intranet
+      </text>
+
+      {/* Per-employee connections + nodes */}
+      {employees.map((emp, i) => {
+        const x = ex(i);
+        const running = emp.status === "running";
+        const inet = !emp.internet_blocked;
+        const nodeCol = !running ? "#4b5563" : inet ? "#4ade80" : "#fbbf24";
+        const lineCol = running ? "rgba(6,182,212,0.22)" : "rgba(75,85,99,0.15)";
+
+        return (
+          <g key={emp.id}>
+            {/* hub ↔ employee */}
+            <line x1={hubX} y1={hubY + 18} x2={x} y2={empY - 18}
+              stroke={lineCol} strokeWidth={1}
+              strokeDasharray={running ? undefined : "4 3"} />
+            {/* employee ↔ internet */}
+            {running && inet && (
+              <line x1={x} y1={empY - 18} x2={inetX} y2={inetY + 14}
+                stroke="rgba(59,130,246,0.18)" strokeWidth={1} strokeDasharray="3 3" />
+            )}
+            {/* node box */}
+            <rect x={x - 38} y={empY - 18} width={76} height={36} rx={6}
+              fill="rgba(12,12,12,0.9)" stroke={nodeCol} strokeWidth={0.8} strokeOpacity={0.45} />
+            {/* status dot */}
+            <circle cx={x + 30} cy={empY - 10} r={3.5} fill={nodeCol} opacity={0.85} />
+            {/* name */}
+            <text x={x} y={empY - 2} textAnchor="middle" fontSize={11} fontWeight="600"
+              fill={running ? "#e5e7eb" : "#6b7280"}>
+              {emp.name.length > 9 ? emp.name.slice(0, 8) + "…" : emp.name}
+            </text>
+            {/* alias */}
+            <text x={x} y={empY + 12} textAnchor="middle" fontSize={9} fontFamily="monospace"
+              fill={running ? "rgba(103,232,249,0.65)" : "rgba(107,114,128,0.4)"}>
+              {sanitizeAlias(emp.name).slice(0, 11)}
+            </text>
+          </g>
+        );
+      })}
+
+      {/* Legend */}
+      <circle cx={16} cy={H - 12} r={3.5} fill="#4ade80" opacity={0.85} />
+      <text x={26} y={H - 8} fill="#4b5563" fontSize={9}>Running + Internet</text>
+      <circle cx={138} cy={H - 12} r={3.5} fill="#fbbf24" opacity={0.85} />
+      <text x={148} y={H - 8} fill="#4b5563" fontSize={9}>Running + Intranet only</text>
+      <circle cx={282} cy={H - 12} r={3.5} fill="#4b5563" opacity={0.85} />
+      <text x={292} y={H - 8} fill="#4b5563" fontSize={9}>Stopped</text>
+    </svg>
+  );
+}
+
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
 export function Dashboard({ onRefresh }: Props) {
@@ -227,7 +309,6 @@ export function Dashboard({ onRefresh }: Props) {
   const [employees, setEmployees] = useState<EmployeeStatus[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
-  const [messages, setMessages] = useState<EnterpriseMessage[]>([]);
 
   // Employee editing
   const [editingEmpId, setEditingEmpId] = useState<string | null>(null);
@@ -241,28 +322,15 @@ export function Dashboard({ onRefresh }: Props) {
   const presetsRef = useRef<HTMLDivElement>(null);
 
   const load = async () => {
-    const [cfg, emps, msgs] = await Promise.all([
+    const [cfg, emps] = await Promise.all([
       invoke<AppConfig>("load_config"),
       invoke<EmployeeStatus[]>("list_employees"),
-      invoke<EnterpriseMessage[]>("list_enterprise_messages"),
     ]);
     setConfig(cfg);
     setEmployees(emps);
-    setMessages(msgs);
   };
 
   useEffect(() => { load(); }, []);
-
-  // Poll for new inter-agent messages every 4 seconds
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const msgs = await invoke<EnterpriseMessage[]>("list_enterprise_messages");
-        setMessages(msgs);
-      } catch {}
-    }, 4000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Close presets dropdown on outside click
   useEffect(() => {
@@ -341,11 +409,6 @@ export function Dashboard({ onRefresh }: Props) {
     await invoke("set_internet_access", { employeeId: empId, blocked: !currentlyBlocked });
     await load();
     onRefresh();
-  };
-
-  const clearMessages = async () => {
-    await invoke("clear_enterprise_messages");
-    setMessages([]);
   };
 
   const runningCount = employees.filter((e) => e.status === "running").length;
@@ -612,107 +675,65 @@ export function Dashboard({ onRefresh }: Props) {
 
         {/* ── Enterprise Intranet ────────────────────────────────── */}
         <div className="bg-[#252526] border border-[#333333] rounded-xl p-6">
-          <div className="flex items-center gap-3 mb-2">
-            <Network className="text-cyan-400" size={18} />
-            <h2 className="text-base font-medium text-white">Enterprise Intranet</h2>
-            <span className="text-xs text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20 font-mono">
-              openclaw-intranet
-            </span>
+          <div className="flex items-center justify-between mb-1">
+            <div className="flex items-center gap-3">
+              <Network className="text-cyan-400" size={18} />
+              <h2 className="text-base font-medium text-white">Network Topology</h2>
+              <span className="text-xs text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20 font-mono">
+                openclaw-intranet
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-gray-600">
+              <Radio size={11} />
+              <span>Monitor via Local.Bus in sidebar</span>
+            </div>
           </div>
-          <p className="text-xs text-gray-500 mb-4">
-            All active employees share a private Docker bridge. Reach peers by name:{" "}
-            <code className="bg-[#1e1e1e] px-1.5 py-0.5 rounded text-cyan-300">http://alice:8000</code>.{" "}
-            Use <code className="bg-[#1e1e1e] px-1.5 py-0.5 rounded text-cyan-300">claw_msg &lt;to&gt; &lt;message&gt;</code> inside a container to post inter-agent messages.
+          <p className="text-xs text-gray-600 mb-4">
+            Reach peers inside container:{" "}
+            <code className="bg-[#1e1e1e] px-1 rounded text-cyan-400 font-mono">http://&lt;alias&gt;:port</code>
+            {" · "}
+            <code className="bg-[#1e1e1e] px-1 rounded text-cyan-400 font-mono">claw_msg &lt;to&gt; &lt;msg&gt;</code>
           </p>
 
-          {/* Network topology cards */}
-          {employees.length === 0 ? (
-            <p className="text-xs text-gray-600">No employees yet.</p>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+          {/* SVG topology map */}
+          <div className="bg-[#1a1a1a] rounded-lg p-2 mb-4 overflow-x-auto">
+            <NetworkTopologyMap employees={employees} />
+          </div>
+
+          {/* Internet access toggles */}
+          {employees.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
               {employees.map((emp) => (
                 <div
                   key={emp.id}
-                  className="bg-[#1e1e1e] rounded-lg border border-[#333] p-3 flex flex-col gap-2"
+                  className="bg-[#1e1e1e] border border-[#2a2a2a] rounded-lg px-3 py-2 flex items-center justify-between gap-2"
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium text-white truncate">{emp.name}</span>
-                    <span
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        emp.status === "running" ? "bg-green-500" : "bg-gray-600"
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-200 truncate">{emp.name}</p>
+                    <p className="text-[10px] font-mono text-cyan-600 truncate">
+                      {sanitizeAlias(emp.name)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => toggleInternet(emp.id, emp.internet_blocked)}
+                    className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${
+                      emp.internet_blocked ? "bg-red-700/50" : "bg-green-700/50"
+                    }`}
+                    title={emp.internet_blocked ? "Click to enable internet" : "Click to block internet"}
+                  >
+                    <div
+                      className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${
+                        emp.internet_blocked ? "left-0.5" : "left-4"
                       }`}
                     />
-                  </div>
-                  <code className="text-xs text-cyan-400 font-mono truncate">
-                    {sanitizeAlias(emp.name)}
-                  </code>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      {emp.internet_blocked ? (
-                        <GlobeLock size={12} className="text-red-400" />
-                      ) : (
-                        <Globe size={12} className="text-green-400" />
-                      )}
-                      <span className={`text-xs ${emp.internet_blocked ? "text-red-400" : "text-green-400"}`}>
-                        {emp.internet_blocked ? "Intranet only" : "Full access"}
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => toggleInternet(emp.id, emp.internet_blocked)}
-                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${
-                        emp.internet_blocked ? "bg-red-600/60" : "bg-green-600/60"
-                      }`}
-                      title={emp.internet_blocked ? "Enable internet" : "Block internet"}
-                    >
-                      <div
-                        className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${
-                          emp.internet_blocked ? "left-0.5" : "left-4"
-                        }`}
-                      />
-                    </button>
-                  </div>
+                  </button>
                 </div>
               ))}
             </div>
           )}
-
-          {/* Inter-agent message log */}
-          <div className="border-t border-[#333] pt-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <MessageSquare size={13} className="text-gray-500" />
-                <span className="text-xs text-gray-400 font-medium">Inter-agent Messages</span>
-                {messages.length > 0 && (
-                  <span className="text-xs text-gray-600">({messages.length})</span>
-                )}
-              </div>
-              {messages.length > 0 && (
-                <button
-                  onClick={clearMessages}
-                  className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
-                >
-                  Clear
-                </button>
-              )}
-            </div>
-            <div className="bg-[#1a1a1a] rounded-md p-3 h-44 overflow-y-auto font-mono text-xs space-y-1.5">
-              {messages.length === 0 ? (
-                <span className="text-gray-700">
-                  No messages yet. Agents can use{" "}
-                  <span className="text-gray-500">claw_msg &lt;to&gt; &lt;msg&gt;</span> to communicate.
-                </span>
-              ) : (
-                messages.map((msg, i) => (
-                  <div key={i} className="flex gap-2 text-gray-400">
-                    <span className="text-blue-400 shrink-0">[{msg.from}]</span>
-                    <span className="text-gray-600">→</span>
-                    <span className="text-purple-400 shrink-0">[{msg.to}]</span>
-                    <span className="text-gray-300 break-all">{msg.message}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          {employees.length === 0 && (
+            <p className="text-xs text-gray-700 text-center py-4">No employees. Create one to see the network topology.</p>
+          )}
         </div>
 
       </div>

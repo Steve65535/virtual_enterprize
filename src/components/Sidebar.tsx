@@ -1,5 +1,5 @@
 import {
-  Bot, Plus, Settings, TerminalSquare, X,
+  Bot, Plus, Radio, Settings, TerminalSquare, X,
   Eye, EyeOff, ChevronRight, ChevronLeft, Check, AlertCircle,
 } from "lucide-react";
 import { useState, useEffect } from "react";
@@ -12,6 +12,8 @@ interface Props {
   onSelect: (id: string) => void;
   setShowDashboard: (show: boolean) => void;
   onRefresh: () => void;
+  showBusMonitor: boolean;
+  onToggleBus: () => void;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -128,7 +130,7 @@ function SecretField({
 }
 
 // ── Main Sidebar component ─────────────────────────────────────────────────────
-export function Sidebar({ employees, selectedId, onSelect, setShowDashboard, onRefresh }: Props) {
+export function Sidebar({ employees, selectedId, onSelect, setShowDashboard, onRefresh, showBusMonitor, onToggleBus }: Props) {
   const [showWizard, setShowWizard] = useState(false);
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
@@ -257,12 +259,28 @@ export function Sidebar({ employees, selectedId, onSelect, setShowDashboard, onR
           </div>
         </div>
 
-        <div
-          className="text-gray-400 cursor-pointer hover:text-white transition-colors"
-          title="Dashboard & Settings"
-          onClick={() => setShowDashboard(true)}
-        >
-          <Settings size={22} />
+        <div className="flex flex-col items-center gap-3">
+          {/* Local.Bus monitor */}
+          <div
+            className={`p-2 rounded-lg cursor-pointer transition-all ${
+              showBusMonitor
+                ? "bg-green-500/20 text-green-400"
+                : "text-gray-600 hover:text-green-500"
+            }`}
+            title="Local.Bus — inter-agent messages"
+            onClick={onToggleBus}
+          >
+            <Radio size={20} />
+          </div>
+
+          {/* Settings / Dashboard */}
+          <div
+            className="text-gray-400 cursor-pointer hover:text-white transition-colors"
+            title="Dashboard & Settings"
+            onClick={() => setShowDashboard(true)}
+          >
+            <Settings size={22} />
+          </div>
         </div>
       </div>
 

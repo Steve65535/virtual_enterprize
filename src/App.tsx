@@ -4,6 +4,7 @@ import { ChatTerminal } from "./components/ChatTerminal";
 import { FileTree } from "./components/FileTree";
 import { Dashboard } from "./components/Dashboard";
 import { GatewayConfig } from "./components/GatewayConfig";
+import { BusMonitor } from "./components/BusMonitor";
 import { SquareTerminal, Play } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { EmployeeStatus } from "./types";
@@ -14,6 +15,7 @@ function App() {
   const [employees, setEmployees] = useState<EmployeeStatus[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showDashboard, setShowDashboard] = useState(false);
+  const [showBusMonitor, setShowBusMonitor] = useState(false);
 
   const selectedEmployee = employees.find((e) => e.id === selectedId) ?? null;
   const isRunning = selectedEmployee?.status === "running";
@@ -63,7 +65,13 @@ function App() {
         onSelect={(id) => { setSelectedId(id); setShowDashboard(false); }}
         setShowDashboard={setShowDashboard}
         onRefresh={refreshEmployees}
+        showBusMonitor={showBusMonitor}
+        onToggleBus={() => setShowBusMonitor((v) => !v)}
       />
+
+      {showBusMonitor && (
+        <BusMonitor onClose={() => setShowBusMonitor(false)} />
+      )}
 
       {showDashboard ? (
         <Dashboard onRefresh={refreshEmployees} />

@@ -6,6 +6,8 @@ use std::process::Command;
 use std::sync::Mutex;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tauri::{AppHandle, Emitter, Manager};
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
 
 // ── Data Structures ────────────────────────────────────────────────────────────
 
@@ -152,6 +154,151 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+// ── Device Identity Generation ─────────────────────────────────────────────────
+
+fn b64_encode(data: &[u8]) -> String {
+    const C: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut i = 0;
+    while i + 2 < data.len() {
+        let n = (data[i] as u32) << 16 | (data[i+1] as u32) << 8 | data[i+2] as u32;
+        out.push(C[((n >> 18) & 63) as usize] as char);
+        out.push(C[((n >> 12) & 63) as usize] as char);
+        out.push(C[((n >>  6) & 63) as usize] as char);
+        out.push(C[( n        & 63) as usize] as char);
+        i += 3;
+    }
+    match data.len() - i {
+        1 => {
+            let n = (data[i] as u32) << 16;
+            out.push(C[((n >> 18) & 63) as usize] as char);
+            out.push(C[((n >> 12) & 63) as usize] as char);
+            out.push_str("==");
+        }
+        2 => {
+            let n = (data[i] as u32) << 16 | (data[i+1] as u32) << 8;
+            out.push(C[((n >> 18) & 63) as usize] as char);
+            out.push(C[((n >> 12) & 63) as usize] as char);
+            out.push(C[((n >>  6) & 63) as usize] as char);
+            out.push('=');
+        }
+        _ => {}
+    }
+    out
+}
+
+fn pem_encode(label: &str, data: &[u8]) -> String {
+    let b64 = b64_encode(data);
+    let wrapped = b64.as_bytes().chunks(64)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN {label}-----\n{wrapped}\n-----END {label}-----\n")
+}
+
+/// Ed25519 public key → SubjectPublicKeyInfo DER
+fn ed25519_spki(pub_bytes: &[u8; 32]) -> Vec<u8> {
+    // SEQUENCE { SEQUENCE { OID 1.3.101.112 }, BIT STRING { 0x00 || key } }
+    let mut inner = vec![0x30u8, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+                         0x03, 0x21, 0x00];
+    inner.extend_from_slice(pub_bytes);
+    let mut spki = vec![0x30, inner.len() as u8];
+    spki.extend_from_slice(&inner);
+    spki
+}
+
+/// Ed25519 private key → PKCS#8 OneAsymmetricKey DER
+fn ed25519_pkcs8(priv_bytes: &[u8; 32]) -> Vec<u8> {
+    // inner private key octet string: 04 20 <key>
+    let mut inner_key = vec![0x04u8, 0x20];
+    inner_key.extend_from_slice(priv_bytes);
+    // wrap in outer octet string
+    let mut priv_os = vec![0x04u8, inner_key.len() as u8];
+    priv_os.extend_from_slice(&inner_key);
+    // version + alg id + private key
+    let version: &[u8] = &[0x02, 0x01, 0x00];
+    let alg_id:  &[u8] = &[0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70];
+    let inner_len = version.len() + alg_id.len() + priv_os.len();
+    let mut pkcs8 = vec![0x30, inner_len as u8];
+    pkcs8.extend_from_slice(version);
+    pkcs8.extend_from_slice(alg_id);
+    pkcs8.extend_from_slice(&priv_os);
+    pkcs8
+}
+
+/// Generate a fresh device identity: new Ed25519 keypair + random deviceId.
+fn generate_device_identity() -> serde_json::Value {
+    let mut rng = OsRng;
+    let signing_key = SigningKey::generate(&mut rng);
+    let verifying_key = signing_key.verifying_key();
+
+    let pub_pem  = pem_encode("PUBLIC KEY",  &ed25519_spki(&verifying_key.to_bytes()));
+    let priv_pem = pem_encode("PRIVATE KEY", &ed25519_pkcs8(&signing_key.to_bytes()));
+
+    let mut id_bytes = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rng, &mut id_bytes);
+    let device_id: String = id_bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+    let created_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+
+    serde_json::json!({
+        "version": 1,
+        "deviceId": device_id,
+        "publicKeyPem": pub_pem,
+        "privateKeyPem": priv_pem,
+        "createdAtMs": created_at
+    })
+}
+
+// ── New-employee workspace cleanup ────────────────────────────────────────────
+
+/// After template copy: wipe inherited history and mint a fresh device identity.
+fn clean_employee_workspace(vol: &str) {
+    let base = PathBuf::from(vol).join(".openclaw");
+
+    // 1. Wipe conversation session files (keep sessions.json but reset it)
+    let sessions_dir = base.join("agents/main/sessions");
+    if let Ok(entries) = fs::read_dir(&sessions_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().map(|e| e == "jsonl").unwrap_or(false) {
+                let _ = fs::remove_file(&p);
+            }
+        }
+    }
+    let _ = fs::write(sessions_dir.join("sessions.json"), b"{}");
+
+    // 2. Wipe cron run history
+    let cron_runs = base.join("cron/runs");
+    if let Ok(entries) = fs::read_dir(&cron_runs) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+
+    // 3. Wipe logs
+    let logs_dir = base.join("logs");
+    if let Ok(entries) = fs::read_dir(&logs_dir) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+
+    // 4. Reset Feishu dedup state
+    let feishu_dedup = base.join("feishu/dedup/default.json");
+    let _ = fs::write(&feishu_dedup, b"{}");
+
+    // 5. Fresh device identity — new keypair + new deviceId
+    let device_path = base.join("identity/device.json");
+    if let Ok(data) = serde_json::to_string_pretty(&generate_device_identity()) {
+        let _ = fs::write(&device_path, data);
+        eprintln!("[openclaw] fresh device identity written");
+    }
 }
 
 /// Lowercase, replace non-alphanumeric with dash — safe as a Docker network alias.
@@ -391,7 +538,9 @@ fn add_employee(
                     return;
                 }
             }
-            // Inject LLM providers immediately; gateways are empty at creation
+            // Wipe inherited history + mint fresh device identity
+            clean_employee_workspace(&vol);
+            // Inject LLM providers; gateways are empty at creation
             inject_openclaw_config(&vol, &api_providers, &[]);
         });
     }
