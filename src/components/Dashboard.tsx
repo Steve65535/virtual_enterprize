@@ -1,7 +1,7 @@
-import { Box, Check, Edit3, HardDrive, Key, Plus, Trash2, Users, X, ChevronDown } from "lucide-react";
+import { Box, Check, Edit3, Globe, GlobeLock, HardDrive, Key, MessageSquare, Network, Plus, Trash2, Users, X, ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ApiProvider, AppConfig, EmployeeStatus } from "../types";
+import { ApiProvider, AppConfig, EmployeeStatus, EnterpriseMessage } from "../types";
 
 interface Props {
   onRefresh: () => void;
@@ -216,6 +216,10 @@ function SandboxSettings({
   );
 }
 
+function sanitizeAlias(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+}
+
 // ── Dashboard ──────────────────────────────────────────────────────────────────
 
 export function Dashboard({ onRefresh }: Props) {
@@ -223,6 +227,7 @@ export function Dashboard({ onRefresh }: Props) {
   const [employees, setEmployees] = useState<EmployeeStatus[]>([]);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
+  const [messages, setMessages] = useState<EnterpriseMessage[]>([]);
 
   // Employee editing
   const [editingEmpId, setEditingEmpId] = useState<string | null>(null);
@@ -236,15 +241,28 @@ export function Dashboard({ onRefresh }: Props) {
   const presetsRef = useRef<HTMLDivElement>(null);
 
   const load = async () => {
-    const [cfg, emps] = await Promise.all([
+    const [cfg, emps, msgs] = await Promise.all([
       invoke<AppConfig>("load_config"),
       invoke<EmployeeStatus[]>("list_employees"),
+      invoke<EnterpriseMessage[]>("list_enterprise_messages"),
     ]);
     setConfig(cfg);
     setEmployees(emps);
+    setMessages(msgs);
   };
 
   useEffect(() => { load(); }, []);
+
+  // Poll for new inter-agent messages every 4 seconds
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const msgs = await invoke<EnterpriseMessage[]>("list_enterprise_messages");
+        setMessages(msgs);
+      } catch {}
+    }, 4000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Close presets dropdown on outside click
   useEffect(() => {
@@ -317,6 +335,17 @@ export function Dashboard({ onRefresh }: Props) {
     await invoke("remove_employee", { id });
     await load();
     onRefresh();
+  };
+
+  const toggleInternet = async (empId: string, currentlyBlocked: boolean) => {
+    await invoke("set_internet_access", { employeeId: empId, blocked: !currentlyBlocked });
+    await load();
+    onRefresh();
+  };
+
+  const clearMessages = async () => {
+    await invoke("clear_enterprise_messages");
+    setMessages([]);
   };
 
   const runningCount = employees.filter((e) => e.status === "running").length;
@@ -580,6 +609,111 @@ export function Dashboard({ onRefresh }: Props) {
 
         {/* ── Sandbox Image & Template ───────────────────────────── */}
         <SandboxSettings defaultImage={config.default_image} templatePath={config.template_path} onSaved={load} />
+
+        {/* ── Enterprise Intranet ────────────────────────────────── */}
+        <div className="bg-[#252526] border border-[#333333] rounded-xl p-6">
+          <div className="flex items-center gap-3 mb-2">
+            <Network className="text-cyan-400" size={18} />
+            <h2 className="text-base font-medium text-white">Enterprise Intranet</h2>
+            <span className="text-xs text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20 font-mono">
+              openclaw-intranet
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mb-4">
+            All active employees share a private Docker bridge. Reach peers by name:{" "}
+            <code className="bg-[#1e1e1e] px-1.5 py-0.5 rounded text-cyan-300">http://alice:8000</code>.{" "}
+            Use <code className="bg-[#1e1e1e] px-1.5 py-0.5 rounded text-cyan-300">claw_msg &lt;to&gt; &lt;message&gt;</code> inside a container to post inter-agent messages.
+          </p>
+
+          {/* Network topology cards */}
+          {employees.length === 0 ? (
+            <p className="text-xs text-gray-600">No employees yet.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+              {employees.map((emp) => (
+                <div
+                  key={emp.id}
+                  className="bg-[#1e1e1e] rounded-lg border border-[#333] p-3 flex flex-col gap-2"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium text-white truncate">{emp.name}</span>
+                    <span
+                      className={`w-2 h-2 rounded-full shrink-0 ${
+                        emp.status === "running" ? "bg-green-500" : "bg-gray-600"
+                      }`}
+                    />
+                  </div>
+                  <code className="text-xs text-cyan-400 font-mono truncate">
+                    {sanitizeAlias(emp.name)}
+                  </code>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      {emp.internet_blocked ? (
+                        <GlobeLock size={12} className="text-red-400" />
+                      ) : (
+                        <Globe size={12} className="text-green-400" />
+                      )}
+                      <span className={`text-xs ${emp.internet_blocked ? "text-red-400" : "text-green-400"}`}>
+                        {emp.internet_blocked ? "Intranet only" : "Full access"}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => toggleInternet(emp.id, emp.internet_blocked)}
+                      className={`w-8 h-4 rounded-full relative transition-colors shrink-0 ${
+                        emp.internet_blocked ? "bg-red-600/60" : "bg-green-600/60"
+                      }`}
+                      title={emp.internet_blocked ? "Enable internet" : "Block internet"}
+                    >
+                      <div
+                        className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${
+                          emp.internet_blocked ? "left-0.5" : "left-4"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Inter-agent message log */}
+          <div className="border-t border-[#333] pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <MessageSquare size={13} className="text-gray-500" />
+                <span className="text-xs text-gray-400 font-medium">Inter-agent Messages</span>
+                {messages.length > 0 && (
+                  <span className="text-xs text-gray-600">({messages.length})</span>
+                )}
+              </div>
+              {messages.length > 0 && (
+                <button
+                  onClick={clearMessages}
+                  className="text-xs text-gray-600 hover:text-gray-300 transition-colors"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="bg-[#1a1a1a] rounded-md p-3 h-44 overflow-y-auto font-mono text-xs space-y-1.5">
+              {messages.length === 0 ? (
+                <span className="text-gray-700">
+                  No messages yet. Agents can use{" "}
+                  <span className="text-gray-500">claw_msg &lt;to&gt; &lt;msg&gt;</span> to communicate.
+                </span>
+              ) : (
+                messages.map((msg, i) => (
+                  <div key={i} className="flex gap-2 text-gray-400">
+                    <span className="text-blue-400 shrink-0">[{msg.from}]</span>
+                    <span className="text-gray-600">→</span>
+                    <span className="text-purple-400 shrink-0">[{msg.to}]</span>
+                    <span className="text-gray-300 break-all">{msg.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
 
       </div>
     </div>

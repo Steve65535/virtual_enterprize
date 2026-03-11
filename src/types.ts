@@ -12,6 +12,14 @@ export interface EmployeeConfig {
   memory_limit: string;
   cpu_limit: string;
   app_gateways: AppGateway[];
+  internet_blocked: boolean;
+}
+
+export interface EnterpriseMessage {
+  from: string;
+  to: string;
+  message: string;
+  timestamp: number;
 }
 
 export interface EmployeeStatus extends EmployeeConfig {
